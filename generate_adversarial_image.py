@@ -206,11 +206,27 @@ def generate_adversarial_image(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--image_path", type=Path, default="assets/elephant.webp")
-    parser.add_argument("--target_class", type=int, default=1)
-    parser.add_argument("--num_steps", type=int, default=100)
-    parser.add_argument("--c", type=float, default=0.01)
-    parser.add_argument("--use_lagrangian_method", type=bool, default=True)
+    parser = argparse.ArgumentParser(
+        description="Computes the adversarial noise necessary to add to an input image such that a resnet classifier misclassifies the image as target_class."
+    )
+    parser.add_argument(
+        "--image_path", type=Path, default="assets/elephant.webp", help="The path to input image."
+    )
+    parser.add_argument("--target_class", type=int, default=1, help="The target class.")
+    parser.add_argument(
+        "--num_steps", type=int, default=100, help="The number of optimizer steps."
+    )
+    parser.add_argument(
+        "--c",
+        type=float,
+        default=0.01,
+        help="The regularization constant on the norm of the noise. Is ignored if use_lagrangian_method is True.",
+    )
+    parser.add_argument(
+        "--use_lagrangian_method",
+        type=bool,
+        default=True,
+        help="If true, uses lagrangian multipliers in the computation to avoid having to set the regularization constant on the norm of the noise.",
+    )
     args, _ = parser.parse_known_args()
     generate_adversarial_image(**args.__dict__)
