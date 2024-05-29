@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from typing import Any, Callable, cast
 
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
 from PIL import Image
@@ -20,6 +22,50 @@ def print_probs(
         class_name = class_dict[int(index)]
         prob = float(probs[0, index])
         print(f"\t{class_name}: {prob:.2%}")
+
+
+# undoes imagenet normalization so images can be displayed properly
+def _undo_normalization(image: Tensor) -> Tensor:
+    mean = (0.485, 0.456, 0.406)
+    std = (0.229, 0.224, 0.225)
+    for c in range(image.shape[0]):
+        image[c] = image[c] * std[c] + mean[c]
+    return image
+
+
+def plot_results(
+    image: Tensor,
+    noise: Tensor,
+    probs_input: Tensor,
+    probs_adversarial: Tensor,
+    class_dict: dict[int, str],
+) -> None:
+    """Shows plot/images of the input image, the noise and the adversarial image.
+
+    Args:
+        image (Tensor): The input image.
+        noise (Tensor): The adversarial noise.
+        probs_input (Tensor): The predicted probabilities for the input image.
+        probs_adversarial (Tensor): The predicted probabilities for the adversarial image (image + noise)
+        class_dict (dict[int, str]): The mapping between class indices and class names.
+    """
+    images = (image, noise, image + noise)
+    titles = ("Input", "Noise", "Input + Noise")
+    all_probs = (probs_input, None, probs_adversarial)
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    for ax, title, img, probs in zip(axes, titles, images, all_probs):
+        if probs is not None:
+            index = int(torch.argmax(probs[0]))
+            prob = float(probs[0, index])
+            class_name = class_dict[index]
+            ax.text(5, 5, f"{class_name}: {prob:.2%}", bbox={"facecolor": "white", "pad": 10})
+        np_img = np.array(_undo_normalization(img[0]).moveaxis(0, -1))
+        ax.imshow(np_img)
+        ax.set_title(title)
+        ax.axis("off")
+    plt.tight_layout()
+    plt.show()
 
 
 def get_imagenet_class_dict() -> dict[int, str]:
@@ -104,11 +150,12 @@ def generate_adversarial_image(
     class_dict = get_imagenet_class_dict()
     model, preprocess = get_resnet50_model()
     image = preprocess(Image.open(image_path)).unsqueeze(0)
-    probs = classify(model, image)
-    print_probs(probs, class_dict, title="Probabilities for input image:")
+    probs_input = classify(model, image)
+    print_probs(probs_input, class_dict, title="Probabilities for input image:")
     noise = compute_adversarial_noise(model, image, target_class, num_steps=num_steps, c=c)
     probs_adversarial = classify(model, image + noise)
     print_probs(probs_adversarial, class_dict, title="Probabilities for adversarial image:")
+    plot_results(image, noise, probs_input, probs_adversarial, class_dict)
 
 
 if __name__ == "__main__":
