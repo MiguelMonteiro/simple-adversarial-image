@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 from torch import Tensor
-from torch.optim import AdamW
+from torch.optim import AdamW, SGD
 from torchvision.models.resnet import ResNet50_Weights, resnet50
 from tqdm import tqdm
 
@@ -137,11 +137,55 @@ def compute_adversarial_noise(
     return noise.detach()
 
 
+def compute_adversarial_noise_with_lagrangian(
+    model: nn.Module, image: Tensor, target_class: int, num_steps: int = 100
+) -> Tensor:
+    """Computes the "minimal" adversarial noise to add to the image such that the new predicted class will equal target_class
+
+    Args:
+        model (nn.Module): The model.
+        image (Image): The pre-processed input image with shape (batch_size, num_channels, width, height).
+        target_class (int): The target class.
+        num_steps (int, optional): The number of optimization steps. Defaults to 100.
+
+    Returns:
+        Tensor: The computed adversarial noise.
+    """
+    epsilon = 0.01
+    target = torch.zeros(size=(image.shape[0], 1000))
+    target[:, target_class] = 1
+    noise = torch.zeros_like(image, requires_grad=True)
+    noise_optimizer = AdamW(params=[noise], lr=0.001)
+    # Lagrangian multipliers https://www.engraved.blog/how-we-can-make-machine-learning-algorithms-tunable/
+    lagrangian_mult = torch.tensor(1.0, requires_grad=True)
+    lagrangian_optimizer = SGD(params=[lagrangian_mult], lr=0.1)
+    for _ in (pbar := tqdm(range(num_steps))):
+        with torch.no_grad():
+            lagrangian_mult = lagrangian_mult.clamp_(min=0)
+
+        noise_optimizer.zero_grad()
+        lagrangian_optimizer.zero_grad()
+
+        logits = model(image + noise)
+        nll = torch.nn.functional.cross_entropy(input=logits, target=target)
+        loss = nll - lagrangian_mult * (epsilon - torch.mean(torch.abs(noise)))
+
+        loss.backward()
+        noise_optimizer.step()
+        lagrangian_mult.grad = -lagrangian_mult.grad  # gradient ascent on multiplier
+        lagrangian_optimizer.step()
+
+        pbar.set_description(f"NLL: {float(nll):.4f}   _lambda: {float(lagrangian_mult):.2f}")
+
+    return noise.detach()
+
+
 def generate_adversarial_image(
     image_path: Path,
     target_class: int,
     num_steps: int,
-    c: float = 0.01,
+    c: float,
+    use_lagrangian_method: bool,
 ) -> None:
     if target_class < 0 or target_class > 999:
         raise ValueError(
@@ -152,7 +196,10 @@ def generate_adversarial_image(
     image = preprocess(Image.open(image_path)).unsqueeze(0)
     probs_input = classify(model, image)
     print_probs(probs_input, class_dict, title="Probabilities for input image:")
-    noise = compute_adversarial_noise(model, image, target_class, num_steps=num_steps, c=c)
+    if use_lagrangian_method:
+        noise = compute_adversarial_noise_with_lagrangian(model, image, target_class, num_steps)
+    else:
+        noise = compute_adversarial_noise(model, image, target_class, num_steps, c=c)
     probs_adversarial = classify(model, image + noise)
     print_probs(probs_adversarial, class_dict, title="Probabilities for adversarial image:")
     plot_results(image, noise, probs_input, probs_adversarial, class_dict)
@@ -164,5 +211,6 @@ if __name__ == "__main__":
     parser.add_argument("--target_class", type=int, default=1)
     parser.add_argument("--num_steps", type=int, default=100)
     parser.add_argument("--c", type=float, default=0.01)
+    parser.add_argument("--use_lagrangian_method", type=bool, default=True)
     args, _ = parser.parse_known_args()
     generate_adversarial_image(**args.__dict__)
